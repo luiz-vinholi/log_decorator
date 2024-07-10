@@ -3,7 +3,7 @@ import inspect
 from contextlib import contextmanager
 from typing import Any, List, Optional
 
-from .logger import logger
+from .log_setup import logger
 
 
 def log(action: Optional[str] = None, 
@@ -34,8 +34,10 @@ def log(action: Optional[str] = None,
 
     The `action` parameter specifies the action being performed by the function, which will be included
     in the log message. The `identifier` parameter specifies the identifier for the function, which can
-    be used to identify the specific parameter of the function being executed. The `inject` parameter
-    determines whether the logger should be injected into the function's keyword arguments.
+    be used to identify the specific parameter of the function being executed, you can specify the path
+    of the object using dot-notation, for example "father.child.name" (works only in dict or Class). 
+    The `inject` parameter determines whether the logger should be injected into the function's keyword 
+    arguments.
 
     When the decorated function is called, the logger will be available as a keyword argument named
     '__logger', if parameter `inject` setted with True. This allows the function to log additional 
@@ -48,11 +50,12 @@ def log(action: Optional[str] = None,
         @contextmanager
         def log_context(*args, **kwargs):
             pattern = '{func_name} with args: {args}'
+            identifier_value = None
             if identifier:
                 pattern = '{func_name} with {identifier_name}: {identifier_value}'
-                identifier_value = __get_func_param_by_name(func, args, identifier)
+                identifier_value = __get_func_param_by_name(func, args, kwargs, identifier)
             if action:
-                pattern = '{action} with {identifier_name}: {identifier_value}'
+                pattern = pattern.replace('{func_name}', '{action}')
 
             __logger = __Logger(
                 pattern,
@@ -71,7 +74,11 @@ def log(action: Optional[str] = None,
                 yield kwargs
                 __logger.finish()
             except Exception as e:
-                __logger.exception(str(e))
+                __logger.exception(str(e), extra={
+                    'exception': e,
+                    'args': args,
+                    'kwargs': kwargs,
+                })
                 raise e
 
 
@@ -111,43 +118,63 @@ class __Logger():
         }
 
 
-    def __log(self, type: str, message: str):
-        self._logger[type](f'{self._message} | {message}')
+    def __log(self, type: str, message: str, extra: Optional[dict] = None):
+        self._logger[type](f'{self._message} | {message}', extra=extra)
 
 
     def start(self):
         self._logger['info'](f'Starting {self._message}')
 
 
-    def info(self, message: str):
-        self.__log('info', message)
+    def info(self, message: str, extra: Optional[dict] = None):
+        self.__log('info', message, extra=extra)
 
 
-    def debug(self, message: str):
-        self.__log('debug', message)
-
-    
-    def warning(self, message: str):
-        self.__log('warning', message)
+    def debug(self, message: str, extra: Optional[dict] = None):
+        self.__log('debug', message, extra=extra)
 
     
-    def error(self, message: str):
-        self.__log('error', message)
+    def warning(self, message: str, extra: Optional[dict] = None):
+        self.__log('warning', message, extra=extra)
+
+    
+    def error(self, message: str, extra: Optional[dict] = None):
+        self.__log('error', message, extra=extra)
 
 
-    def exception(self, message: str):
-        self.__log('exception', message)
+    def exception(self, message: str, extra: Optional[dict] = None):
+        self.__log('exception', message, extra=extra)
+
+
+    def expected_error(self, message: str):
+        self._logger['error'](f'Expected error: {message} on {self._message}')
 
 
     def finish(self):
         self._logger['info'](f'Finished {self._message}')
 
 
-def __get_func_param_by_name(func, args: List[Any], param_name: str):
+def __get_func_param_by_name(func, args: List[Any], kwargs: dict, param_name: str):
+    has_subitem = '.' in param_name
+    subitems = []
+    if has_subitem:
+        items = param_name.split('.')
+        subitems = items[1:]
+        param_name = items[0]
+        
     func_args = list(inspect.signature(func).parameters.keys())
     try:
         identifier_index = func_args.index(param_name)
-        identifier_value = args[identifier_index]
+        try:
+            identifier_value = args[identifier_index]
+        except IndexError:
+            identifier_value = kwargs.get(param_name)
+
+        for subitem in subitems:
+            if isinstance(identifier_value, dict):
+                identifier_value = identifier_value[subitem]
+            else:
+                identifier_value = vars(identifier_value)[subitem]
     except ValueError:
         raise ValueError(f'Identifier {param_name} not found in function arguments')
     return identifier_value
